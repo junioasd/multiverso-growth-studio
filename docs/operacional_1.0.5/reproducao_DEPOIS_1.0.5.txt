@@ -1,0 +1,15 @@
+# DEPOIS — 1.0.5 candidate
+=== B1: entrypoint api/server.py (run_server) sem main.py
+   apos run_server(): kill switch = DISABLED | CostGuard global = ./data/mgs.db
+   busca PAGA sem limite: available = False | hits = []
+=== B2: limite do Owner = USD 0,00; estimativa 0; provedor nao informa custo
+   search=False generation=False | hits=[] | ledger={} | incidentes=0
+=== B3: incidente de moeda 'resolvido' so com texto
+   resolve so com texto: RECUSADO ValueError
+   apos resolve: ledger m = {'calls': 1, 'known_cost': 0, 'calls_cost_unknown': 1, 'budget_charged': 1.0} | proxima reserva USD 1: COST_INCIDENT_REVIEW_REQUIRED
+=== B4: settle repetido com conteudo divergente
+   1a: {'reservation_id': 'rsv_bea7ee315dbd4bde', 'status': 'COMMITTED', 'cost_status': 'ESTIMATED', 'budget_charge': 1.0}
+   2a (100): REJEITADA SettlementConflict
+   ledger r = 1.0 | incidentes r = 1
+=== OBS: navegador — trava ativada durante page.goto
+   chamadas: ['goto'] | estado: ENABLED | success = False

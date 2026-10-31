@@ -1,0 +1,9 @@
+# ANTES — pacote 1.0.11 auditado (0564f0d5…)
+=== 1) run_metered_call: mesmo correlation_id, PROMPT A e depois PROMPT B
+   PROMPT A: available=True | 
+   PROMPT B: available=False | ALREADY_COMPLETED: chamada lógica 'cid-1' já 
+   executados: ['PROMPT A'] | fingerprint persistido: ["reservation_payload", "paid", "gen", "gen", "1.0", "USD", null, null, null]
+=== 2) HttpGenerationProvider -> socket loopback: prompt A e depois prompt B com o mesmo correlation_id
+   prompt A: available=True | 
+   prompt B: available=False | ALREADY_COMPLETED: chamada lógica 'same-id' j
+   requisicoes recebidas pelo servidor (prompts): ['A']

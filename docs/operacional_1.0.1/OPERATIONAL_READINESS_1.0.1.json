@@ -1,0 +1,165 @@
+{
+ "report": "OPERATIONAL_READINESS_1.0.1",
+ "version": "1.0.1-OPERATIONAL-CANDIDATE",
+ "status": "CANDIDATE",
+ "baseline": {
+  "version": "1.0.0",
+  "sha256": "932292a9835fa8ca3b42515cfb356f01e96853c3be7659ae46ff37e800bb42fe",
+  "status": "TECHNICALLY_APPROVED",
+  "unchanged": true
+ },
+ "generated_at_utc": "2026-09-25T00:51:37Z",
+ "environment": "sandbox local (Linux, Python 3.12); comandos reais: main.py backup/worker/scheduler/readiness; nenhuma integração externa",
+ "flags": {
+  "TECHNICALLY_READY": true,
+  "OPERATIONALLY_READY": false,
+  "PUBLIC_EXPOSURE_READY": false,
+  "EXTERNAL_INTEGRATION_PENDING": true
+ },
+ "operational_checks": {
+  "kill_switch": {
+   "status": "READY",
+   "detail": "estado=DISABLED"
+  },
+  "worker": {
+   "status": "READY",
+   "detail": "último heartbeat há 0.6s"
+  },
+  "scheduler": {
+   "status": "READY",
+   "detail": "última janela há 0.3s"
+  },
+  "cost_guard": {
+   "status": "READY",
+   "detail": "ativo; provedores com limite: nenhum (sem limite => PAID_PROVIDER_NOT_AUTHORIZED)"
+  },
+  "logging": {
+   "status": "READY",
+   "detail": "LOG_DIR=/home/claude/opdata101/logs"
+  },
+  "backup": {
+   "status": "READY",
+   "detail": "último backup 20260925T005046809647Z (LOCAL_BACKUP_ONLY)"
+  },
+  "db_path": {
+   "status": "READY",
+   "detail": "DB_PATH explícito fora de local temporário e fora do código (volume não auditável daqui)"
+  },
+  "vault_master_key": {
+   "status": "REQUIRES_OWNER_CONFIGURATION",
+   "detail": "MGS_VAULT_MASTER_KEY ausente"
+  },
+  "session_secret": {
+   "status": "REQUIRES_OWNER_CONFIGURATION",
+   "detail": "SESSION_SECRET ausente"
+  },
+  "owner_credential": {
+   "status": "REQUIRES_OWNER_CONFIGURATION",
+   "detail": "OWNER_EMAIL/OWNER_PASSWORD_HASH ausentes — usar `main.py set-owner-password`"
+  },
+  "tls": {
+   "status": "PUBLIC_EXPOSURE_NOT_READY",
+   "detail": "sem proxy TLS declarado — não expor publicamente"
+  }
+ },
+ "internal_blockers_remaining": [],
+ "owner_only_items": [
+  {
+   "check": "vault_master_key",
+   "status": "REQUIRES_OWNER_CONFIGURATION",
+   "action": "gerar localmente e definir MGS_VAULT_MASTER_KEY (≥32 caracteres aleatórios) como variável do sistema/cofre — nunca em arquivo versionado nem em chat"
+  },
+  {
+   "check": "session_secret",
+   "status": "REQUIRES_OWNER_CONFIGURATION",
+   "action": "gerar e definir SESSION_SECRET (≥32 caracteres aleatórios) da mesma forma"
+  },
+  {
+   "check": "owner_credential",
+   "status": "REQUIRES_OWNER_CONFIGURATION",
+   "action": "definir OWNER_EMAIL e gerar OWNER_PASSWORD_HASH com `python main.py set-owner-password` (senha digitada sem eco)"
+  },
+  {
+   "check": "tls",
+   "status": "PUBLIC_EXPOSURE_NOT_READY",
+   "action": "colocar a aplicação atrás de proxy TLS real (certificado válido), definir BEHIND_TLS_PROXY=1 e APP_ENV=production"
+  },
+  {
+   "check": "DB_PATH em volume persistente de produção (este teste usou diretório local do sandbox; volume real não é auditável daqui)",
+   "status": "REQUIRES_OWNER_CONFIGURATION"
+  },
+  {
+   "check": "destino EXTERNO de backup (hoje LOCAL_BACKUP_ONLY) — BACKUP_EXTERNAL_TARGET + processo de cópia",
+   "status": "REQUIRES_OWNER_CONFIGURATION"
+  },
+  {
+   "check": "limites de custo por provedor pago (sem limite => PAID_PROVIDER_NOT_AUTHORIZED por padrão)",
+   "status": "REQUIRES_OWNER_CONFIGURATION"
+  },
+  {
+   "check": "executar worker/scheduler/backup sob supervisor (systemd/serviço Windows/Agendador) com LOG_DIR/BACKUP_DIR definidos",
+   "status": "REQUIRES_OWNER_CONFIGURATION"
+  }
+ ],
+ "external_service_items": [
+  {
+   "integration": "YouTube Data API v3 (OAuth2)",
+   "status": "EXTERNAL_INTEGRATION_PENDING"
+  },
+  {
+   "integration": "Meta Graph API (Facebook/Instagram)",
+   "status": "EXTERNAL_INTEGRATION_PENDING"
+  },
+  {
+   "integration": "TikTok API",
+   "status": "EXTERNAL_INTEGRATION_PENDING"
+  },
+  {
+   "integration": "Hotmart/Monetizze/Eduzz/Kiwify/Braip",
+   "status": "EXTERNAL_INTEGRATION_PENDING"
+  },
+  {
+   "integration": "Gateway de pagamento",
+   "status": "EXTERNAL_INTEGRATION_PENDING"
+  },
+  {
+   "integration": "Analytics",
+   "status": "EXTERNAL_INTEGRATION_PENDING"
+  },
+  {
+   "integration": "Provedores de vídeo IA (Seedance/Kling/Veo/Sora)",
+   "status": "EXTERNAL_INTEGRATION_PENDING"
+  },
+  {
+   "integration": "LLM pago",
+   "status": "EXTERNAL_INTEGRATION_PENDING"
+  },
+  {
+   "integration": "Provedores de pesquisa dos agentes",
+   "status": "EXTERNAL_INTEGRATION_PENDING"
+  },
+  {
+   "integration": "Modelo de visão",
+   "status": "EXTERNAL_INTEGRATION_PENDING"
+  },
+  {
+   "integration": "Acesso web (egress) do RADAR",
+   "status": "EXTERNAL_INTEGRATION_PENDING"
+  },
+  {
+   "integration": "Chromium do Playwright",
+   "status": "EXTERNAL_INTEGRATION_PENDING"
+  }
+ ],
+ "day0_comparison": {
+  "kill_switch": "NOT_READY → READY",
+  "workers": "NOT_CONFIGURED → READY (comando explícito)",
+  "scheduler": "NOT_CONFIGURED → READY (comando explícito)",
+  "logs": "NOT_CONFIGURED → READY (com LOG_DIR)",
+  "custo_ia_api": "NOT_READY → READY (bloqueio padrão sem limite)",
+  "backup": "NOT_CONFIGURED → READY (LOCAL_BACKUP_ONLY)",
+  "db_path": "NOT_CONFIGURED → validação implementada; volume real: Owner",
+  "secrets": "NOT_CONFIGURED → validação implementada; valores: Owner",
+  "https_cookie": "NOT_CONFIGURED → cookie Secure por ambiente; TLS real: Owner"
+ }
+}

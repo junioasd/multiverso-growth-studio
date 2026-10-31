@@ -1,0 +1,16 @@
+# DEPOIS — 1.0.3 candidate
+=== BLOQUEADOR 1: kill switch ENABLED
+   estado: ENABLED
+   HttpSearchProvider available = False
+   RealWebPageAnalyzer confidence = 0.0
+   OAuth2 exchange success = False | refresh success = False
+   hits recebidos pelo servidor: []
+   BrowserExecutor consulta kill switch? True
+=== BLOQUEADOR 2: integridade monetaria (limite provider_total USD 10)
+   estimated_cost=-5.0: INVALID_COST
+   estimated_cost=-100.0: INVALID_COST
+   estimated_cost=NaN: INVALID_COST
+   provider devolve cost=-20: available = True | ledger: {'calls': 1, 'known_cost': 0, 'calls_cost_unknown': 1, 'budget_charged': 1.0}
+   depois, chamada de USD 20 com limite 10: bloqueada
+   overrun: reserva 1, custo real 20 -> True | ledger: {'calls': 1, 'known_cost': 20.0, 'calls_cost_unknown': 0, 'budget_charged': 20.0}
+   proxima chamada 'over' est=0.01: COST_INCIDENT_REVIEW_REQUIRED

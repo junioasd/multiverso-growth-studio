@@ -1,0 +1,10 @@
+=== A) MOCK_FALLBACK -> missao VERIFIED?
+   status: VERIFIED | verified: True
+=== B) navegador marca PUBLISH como sucesso so por navegar?
+   FAKE_BROWSER_ONLY_NAVIGATED https://example.invalid/post
+   RESULT True BROWSER_AUTOMATION
+=== C/D) replay de pagamento e order_id com payload diferente
+   first pay PAID
+   TAMPERED_REPLAY_ACCEPTED 1.0 PAID
+   TAMPERED_REPLAY_ACCEPTED 999.0 PAID
+   order_id reutilizado com payload diferente ACEITO; devolvido: c1 100.0

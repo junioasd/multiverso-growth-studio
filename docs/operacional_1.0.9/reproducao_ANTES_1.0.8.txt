@@ -1,0 +1,18 @@
+# ANTES — pacote 1.0.8 auditado (9ab6e151…)
+=== B1: moeda legada ZZZ com historico
+   preview: INVALID_CURRENCY
+   retire: REJEITADO ValueError: UNSUPPORTED_CURRENCY: 'ZZZ' tem 1 registro(s) financeiro(s) — exige reconci
+   migrate ZZZ->USD: REJEITADO ValueError: UNSUPPORTED_CURRENCY: origem/destino inválidos, não suportados ou iguais ('
+   fluxo publico de recuperacao existe? False
+=== B2: USD->JPY e depois JPY retirado da politica
+   migracao USD->JPY: {'provider': 'j', 'from': 'USD', 'to': 'JPY', 'fx_rate': 150.0, 'migration_id': 1}
+   retire (JPY fora da politica): {'provider': 'j', 'retired': ['JPY']}
+   limites restantes: [] | historico efetivo: [(1500.0, 'JPY')]
+=== B3: teto alterado depois do uso desconhecido
+   write-off: WRITE_OFF
+   cobranca do evento (teto vigente era 100): [(1.0,)]
+=== B4: duas reservas iguais; resultado de B chega primeiro
+   record_usage(custo 100, sem reservation_id): {'usage_id': None, 'cost_status': 'ESTIMATED', 'reservation_id': 'rsv_0689c872faa4409c', 'settled': 'COMMITTED'}
+   A: [('COMMITTED',)] | B: [('RESERVED',)] | incidentes: ['COST_OVERRUN@A']
+=== B1 (recuperacao): reconcile_unsupported_currency_history ZZZ->USD (5 x 2 = 10)
+   funcao inexistente nesta versao — sem caminho de recuperacao

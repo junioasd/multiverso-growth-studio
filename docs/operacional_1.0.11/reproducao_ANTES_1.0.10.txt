@@ -1,0 +1,9 @@
+# ANTES — pacote 1.0.10 auditado (f78ee197…)
+=== PARTE A: run_metered_call 2x com o mesmo correlation_id
+   resposta: available = True | 
+   resposta: available = True | 
+   perform() executado: 2 vez(es) | reservas: [(None, 'COMMITTED'), (None, 'COMMITTED')] | usos: [(2, 2.0)]
+=== PARTE B: o mesmo usage_event_id entregue 2x, com uma nova reserva criada entre as entregas
+   entrega 1: {'usage_id': None, 'cost_status': 'ESTIMATED', 'reservation_id': 'rsv_9b8a8f80b4694b6c', 'settled': 'COMMITTED'}
+   entrega 2 (mesmo evento): {'usage_id': None, 'cost_status': 'ESTIMATED', 'reservation_id': 'rsv_46c79a6968b54618', 'settled': 'COMMITTED'}
+   A: [('COMMITTED',)] | B: [('COMMITTED',)] | lancamentos: [(2, 2.0)] | usage_event_id gravado: [(None,), (None,)]

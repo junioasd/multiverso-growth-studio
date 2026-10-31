@@ -1,0 +1,11 @@
+# DEPOIS — 1.0.4 candidate
+=== B1: kill switch NAO configurado
+   estado: NOT_CONFIGURED_LIBRARY_MODE | available = True | hits = ['/search1']
+   com APP_ENV=production: available = False | hits = ['/search1']
+=== B2: kill switch ativado DEPOIS da pre-checagem, ANTES do transporte
+   estado: ENABLED | available = False | hits = []
+=== B3: reserva USD 1, custo real EUR 100
+   settle: {'reservation_id': 'rsv_aec365da5abf433e', 'status': 'COMMITTED', 'cost_status': 'CURRENCY_MISMATCH', 'budget_charge': 1.0} | incidentes abertos: 1 | proxima reserva USD 1: COST_INCIDENT_REVIEW_REQUIRED
+=== B4: HttpSearchProvider com CostGuard configurado e SEM limite
+   sem classificacao: available = False | motivo: PAYMENT_CLASSIFICATION_REQUIRED: provedo | hits = [] | ledger: {'http_search_provider/None': {'calls': 1, 'known_cost': 0.0, 'calls_cost_unknown': 0, 'budget_charged': 0.0}}
+   classificado como PAGO, sem limite: available = False | motivo: PAID_PROVIDER_NOT_AUTHORIZED: provedor p | hits = []

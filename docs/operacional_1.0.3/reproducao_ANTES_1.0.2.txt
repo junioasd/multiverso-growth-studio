@@ -1,0 +1,16 @@
+# ANTES — pacote 1.0.2 auditado (15aa6b14…)
+=== BLOQUEADOR 1: kill switch ENABLED
+   estado: ENABLED
+   HttpSearchProvider available = True
+   RealWebPageAnalyzer confidence = 1.0
+   OAuth2 exchange success = False | refresh success = False
+   hits recebidos pelo servidor: ['POST /search', 'GET /page']
+   BrowserExecutor consulta kill switch? False
+=== BLOQUEADOR 2: integridade monetaria (limite provider_total USD 10)
+   estimated_cost=-5.0: AUTHORIZED
+   estimated_cost=-100.0: AUTHORIZED
+   estimated_cost=NaN: EXCECAO IntegrityError NOT NULL constraint failed: ai_api_reservations.amount
+   provider devolve cost=-20: available = True | ledger: {'calls': 1, 'known_cost': -20.0, 'calls_cost_unknown': 0, 'budget_charged': -20.0}
+   depois, chamada de USD 20 com limite 10: EXECUTADA
+   overrun: reserva 1, custo real 20 -> True | ledger: {'calls': 1, 'known_cost': 20.0, 'calls_cost_unknown': 0, 'budget_charged': 20.0}
+   proxima chamada 'over' est=0.01: LIMIT_EXCEEDED

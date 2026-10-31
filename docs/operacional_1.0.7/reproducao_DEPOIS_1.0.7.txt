@@ -1,0 +1,14 @@
+# DEPOIS — 1.0.7 candidate
+=== B1: set_limit concorrente em moedas diferentes
+   resultados: {'per_call': 'ACEITO', 'provider_total': "REJEITADO ValueError: BUDGET_CURRENCY_CONFLICT: provedor 'conc' já opera em ['EUR'"} | moedas persistidas: ['EUR']
+=== B2: repetir USD->EUR com outra taxa
+   migracao 0.9: {'provider': 'fx2', 'from': 'USD', 'to': 'EUR', 'fx_rate': 0.9, 'migration_id': 1}
+   EUR 45.01: LIMIT_EXCEEDED
+   migracao 0.5 (repetida): REJEITADO ValueError: FX_HISTORY_ALREADY_MIGRATED: moeda operacional atual de 'fx2
+   EUR 65: LIMIT_EXCEEDED (antes o saldo era EUR 45)
+=== B3: cadeia USD->EUR->GBP
+   USD->EUR: {'provider': 'fx3', 'from': 'USD', 'to': 'EUR', 'fx_rate': 0.9, 'migration_id': 2} | EUR->GBP: {'provider': 'fx3', 'from': 'EUR', 'to': 'GBP', 'fx_rate': 0.8, 'migration_id': 3}
+   preview GBP 10: AUTHORIZED
+=== B4: reconciliacao FX incoerente (EUR 100 x 0.5 != USD 1)
+   reconcile final=USD 1 fx=0.5: REJEITADO ValueError: FX_RECONCILIATION_MISMATCH: 100.0 EUR × 0.5 + fees 0.0 + aju
+   ledger m = 1.0

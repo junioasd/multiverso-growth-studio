@@ -1,0 +1,9 @@
+# DEPOIS — 1.0.11 candidate
+=== PARTE A: run_metered_call 2x com o mesmo correlation_id
+   resposta: available = True | 
+   resposta: available = False | ALREADY_COMPLETED: chamada lógica 'logical-1' já registrada 
+   perform() executado: 1 vez(es) | reservas: [('logical-1', 'COMMITTED')] | usos: [(1, 1.0)]
+=== PARTE B: o mesmo usage_event_id entregue 2x, com uma nova reserva criada entre as entregas
+   entrega 1: {'usage_id': 2, 'cost_status': 'ESTIMATED', 'reservation_id': 'rsv_d86299e0058345b4', 'settled': 'COMMITTED'}
+   entrega 2 (mesmo evento): {'usage_id': 2, 'cost_status': 'ESTIMATED', 'reservation_id': 'rsv_d86299e0058345b4', 'settled': 'COMMITTED', 'incident_id': None, 'already_recorded': True}
+   A: [('COMMITTED',)] | B: [('RESERVED',)] | lancamentos: [(1, 1.0)] | usage_event_id gravado: [('evt-dup',)]

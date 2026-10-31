@@ -1,0 +1,15 @@
+# DEPOIS — 1.0.2 candidate
+=== 1) provedor pago: limite acumulado USD 1,00; 2 chamadas de 0,60
+   provider.name = http_generation_provider
+   chamada 1: available=True reason=''
+   chamada 2: available=False reason='LIMIT_EXCEEDED: provider_total[*]: gasto 0.6000 + '
+   hits HTTP=1 | consumo registrado={'http_generation_provider/USD': {'calls': 1, 'known_cost': 0, 'calls_cost_unknown': 1, 'budget_charged': 0.6}}
+=== 2) corrida concorrente: limite 10, duas reservas de 6
+   autorizacoes: ['LIMIT_EXCEEDED', 'AUTHORIZED'] | gasto final: {'calls': 1, 'known_cost': 6.0, 'calls_cost_unknown': 0, 'budget_charged': 6.0}
+=== 3) kill switch ativado entre retries de webhook
+   hits=1 kill_switch=ENABLED resultado success=False delivery=TRANSIENT attempts=1
+=== 4) linha do kill switch ausente
+   apos remover a linha: state=UNREADABLE external_execution_allowed=False
+   banco NOVO tem linha inicial explicita? True
+--- liveness:
+retornou: {'status': 'PLANNED'} | passo: {"status": "PLANNED", "reasons": ["BLOCKED_BY_GLOBAL_KILL_SWITCH: execução externa bloqueada (ENABLED; motivo: ativo ANTES do primeiro advance)"], "attempts"

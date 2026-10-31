@@ -1,0 +1,701 @@
+"""
+api.server
+===========
+API + páginas mínimas (somente stdlib `http.server`) para o fluxo de
+login do Owner (Seção 4): formulário -> API login -> autenticação ->
+sessão -> redirecionamento.
+
+MICROCORREÇÃO 3 (auditoria — item 1, ISOLAMENTO E AUTORIZAÇÃO DO PAINEL):
+/dashboard e /api/dashboard agora exigem a permissão VIEW_DASHBOARD e
+filtram TODAS as consultas (CRM, vendas, finanças, War Room) pelos
+escopos da sessão VERIFICADA — nunca por canal/papel/escopo que o
+cliente declare na requisição. O agregado global (todos os canais) só
+é retornado se a sessão tiver escopo coringa ("*") E a permissão
+explícita VIEW_GLOBAL_DASHBOARD (só o Owner tem por padrão). Um
+`?channel=` na query string só é atendido se esse canal estiver dentro
+do escopo da própria sessão — caso contrário, 403. Toda a lógica de
+resolução de escopo vive em
+`GovernedFacade.get_dashboard_view()`/`resolve_readable_channels()`.
+"""
+
+from __future__ import annotations
+
+import json
+from http.cookies import SimpleCookie
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs, urlparse
+
+from api.bootstrap import GrowthStudioApp, build_app
+from api.dashboard import OwnerWarRoom, PerformanceDashboard
+from core.governance.facade import GovernanceDenied
+from core.governance.idempotency import IdempotencyConflict
+from core.governance.replay_guard import ReplayRejected
+from core.isolation.isolation import IsolationViolation
+from core.models.entities import LeadStatus, ValueType
+from core.security.auth import AuthError, principal_from_session
+from core.security.rbac import AccessDenied, Role
+from core.security.sanitize import sanitize_dict
+
+SESSION_COOKIE_NAME = "mgs_session"
+
+
+def _login_page_html(error: str | None = None) -> str:
+    error_html = f'<p style="color:#b00020">{error}</p>' if error else ""
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>MULTIVERSO GROWTH STUDIO — Login</title></head>
+<body style="font-family: sans-serif; max-width: 360px; margin: 80px auto;">
+<h2>MULTIVERSO GROWTH STUDIO</h2>
+<p>Acesso do Owner</p>
+{error_html}
+<form id="loginForm">
+  <label>E-mail<br><input type="email" id="email" required style="width:100%"></label><br><br>
+  <label>Senha<br><input type="password" id="password" required style="width:100%"></label><br><br>
+  <button type="submit">Entrar</button>
+</form>
+<p id="msg" style="color:#b00020"></p>
+<script>
+document.getElementById('loginForm').addEventListener('submit', async (ev) => {{
+  ev.preventDefault();
+  const email = document.getElementById('email').value;
+  const password = document.getElementById('password').value;
+  const res = await fetch('/api/login', {{
+    method: 'POST', headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{email, password}})
+  }});
+  if (res.ok) {{
+    const data = await res.json();
+    window.location = data.redirect || '/dashboard';
+  }} else {{
+    document.getElementById('msg').textContent = 'Credenciais inválidas ou login indisponível.';
+  }}
+}});
+</script>
+</body></html>"""
+
+
+def _dashboard_page_html(owner_subject: str, snapshot, war_room_answers) -> str:
+    def row(label: str, value) -> str:
+        return f"<tr><td style='padding:4px 12px 4px 0;color:#666'>{label}</td><td>{value}</td></tr>"
+
+    rows = "".join([
+        row("Owner", owner_subject),
+        row("Escopo destes dados", snapshot.scope_label),
+        row("Leads", snapshot.leads),
+        row("Vendas (REAL)", snapshot.sales),
+        row("Vendas (ESTIMADO)", snapshot.sales_estimated),
+        row("Vendas (PREVISTO/FORECAST)", snapshot.sales_forecast),
+        row("Reembolsos (REAL)", snapshot.refunds),
+        row("Receita líquida (REAL)", snapshot.revenue),
+        row("Receita líquida (ESTIMADO)", snapshot.revenue_estimated),
+        row("Receita líquida (PREVISTO/FORECAST)", snapshot.revenue_forecast),
+        row("Comissão", snapshot.commission),
+        row("Custo realizado", snapshot.cost),
+        row("Margem", snapshot.margin),
+    ])
+    war_room_rows = "".join(
+        f"<tr><td style='padding:4px 12px 4px 0;color:#666'>{a.question}</td><td>{a.answer}</td></tr>"
+        for a in war_room_answers
+    )
+    note = (
+        "<p style='color:#888'>Campos marcados UNKNOWN indicam ausência de dado persistido — "
+        "nenhum valor é inventado. Valores ESTIMADO/PREVISTO nunca são somados aos REAIS.</p>"
+    )
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>MULTIVERSO GROWTH STUDIO — Dashboard</title></head>
+<body style="font-family: sans-serif; max-width: 640px; margin: 40px auto;">
+<h2>MULTIVERSO GROWTH STUDIO — Dashboard</h2>
+{note}
+<h3>Resumo (dados persistidos, dentro do escopo autorizado)</h3>
+<table>{rows}</table>
+<h3>Owner War Room</h3>
+<table>{war_room_rows}</table>
+<form method="POST" action="/api/logout" onsubmit="event.preventDefault(); fetch('/api/logout',{{method:'POST'}}).then(()=>window.location='/login');">
+  <button type="submit">Sair</button>
+</form>
+</body></html>"""
+
+
+
+def _supervisor_page_html() -> str:
+    sample = {
+        "objective": "Supervisor -> ATLAS E2E readonly get_location",
+        "steps": [
+            {
+                "step_id": "supervisor-readonly-1",
+                "platform": "local",
+                "action": "get_location",
+                "adapter_method": "execute_readonly",
+                "params": {"action": "get_location"},
+                "depends_on": [],
+                "required_params": [],
+                "preconditions": [],
+                "success_result_keys": [],
+                "verify_method": None,
+                "verify_param_from_result": {},
+                "estimated_cost": None,
+                "max_attempts": 3,
+            }
+        ],
+    }
+    sample_json = json.dumps(sample, ensure_ascii=False, indent=2)
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>MGS — Supervisor Gateway</title></head>
+<body style="font-family:sans-serif;max-width:900px;margin:32px auto">
+<h2>MULTIVERSO GROWTH STUDIO — Supervisor Gateway</h2>
+<p>Cliente opcional da máquina autônoma. O Growth/ATLAS continua independente deste painel.</p>
+<textarea id="mission" style="width:100%;height:360px;font-family:monospace">{sample_json}</textarea><br><br>
+<button id="send">Enviar missão</button>
+<input id="runId" placeholder="run_id" style="width:260px;margin-left:12px">
+<button id="status">Consultar</button>
+<pre id="out" style="white-space:pre-wrap;background:#f5f5f5;padding:12px"></pre>
+<script>
+const out = document.getElementById('out');
+document.getElementById('send').onclick = async () => {{
+  try {{
+    const body = JSON.parse(document.getElementById('mission').value);
+    const r = await fetch('/api/supervisor/missions', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify(body)}});
+    const data = await r.json(); out.textContent = JSON.stringify(data,null,2);
+    if (data.run_id) document.getElementById('runId').value = data.run_id;
+  }} catch (e) {{ out.textContent = String(e); }}
+}};
+document.getElementById('status').onclick = async () => {{
+  const id = document.getElementById('runId').value.trim();
+  if (!id) return;
+  const r = await fetch('/api/supervisor/missions/' + encodeURIComponent(id));
+  out.textContent = JSON.stringify(await r.json(),null,2);
+}};
+</script>
+</body></html>"""
+
+def _secure_attr(handler=None) -> str:
+    """Secure em producao, exceto quando o servidor esta realmente preso ao loopback local."""
+    if handler is not None:
+        try:
+            bind_host = str(handler.server.server_address[0]).strip().lower()
+            if bind_host in ("127.0.0.1", "localhost", "::1"):
+                return ""
+        except (AttributeError, IndexError, TypeError):
+            pass
+
+    from core.operations.config_check import cookie_secure
+    return "; Secure" if cookie_secure() else ""
+
+
+def make_handler(app: GrowthStudioApp):
+    dashboard = PerformanceDashboard()
+    war_room = OwnerWarRoom()
+
+    def _build_dashboard_snapshot(principal, requested_channel_id: str | None):
+        # MICROCORREÇÃO 3 (item 1): a filtragem por escopo acontece
+        # DENTRO da fachada (get_dashboard_view) — este handler nunca
+        # decide sozinho quais canais mostrar.
+        view = app.facade.get_dashboard_view(principal, requested_channel_id=requested_channel_id)
+        channels = view["channels"]
+        scope_label = "GLOBAL" if channels is None else (",".join(sorted(channels)) or "NONE")
+        return dashboard.build_snapshot(
+            sales_summary=view["sales_summary"],
+            finance_snapshot=view["finance_snapshot"],
+            total_leads=view["total_leads"],
+            scope_label=scope_label,
+        )
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "MGS/1.0"
+
+        # -- helpers --------------------------------------------------
+
+        def _send_json(self, status: int, payload: dict) -> None:
+            body = json.dumps(payload, default=str).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _send_html(self, status: int, html: str) -> None:
+            body = html.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _redirect(self, location: str) -> None:
+            self.send_response(302)
+            self.send_header("Location", location)
+            self.end_headers()
+
+        def _read_json_body(self) -> dict:
+            length = int(self.headers.get("Content-Length", 0))
+            if length == 0:
+                return {}
+            raw = self.rfile.read(length)
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                return {}
+
+        def _current_token(self) -> str | None:
+            cookie_header = self.headers.get("Cookie")
+            if not cookie_header:
+                return None
+            cookie = SimpleCookie()
+            cookie.load(cookie_header)
+            morsel = cookie.get(SESSION_COOKIE_NAME)
+            return morsel.value if morsel else None
+
+        def _require_principal(self):
+            """Deriva o Principal EXCLUSIVAMENTE da sessão verificada.
+            Retorna None se não houver sessão válida (chamador decide
+            como responder — 401 para API, redirect para páginas)."""
+            token = self._current_token()
+            if not token:
+                return None
+            try:
+                session = app.auth.current_session(token)
+            except AuthError:
+                return None
+            try:
+                return principal_from_session(session)
+            except AuthError:
+                return None
+
+        def _require_owner_principal(self):
+            principal = self._require_principal()
+            if principal is None:
+                return None, (401, {"error": "não autenticado"})
+            if getattr(principal, "role", None) != Role.OWNER:
+                return None, (403, {"error": "Owner obrigatório"})
+            return principal, None
+
+        def _handle_governed_error(self, exc: Exception) -> None:
+            if isinstance(exc, AccessDenied):
+                self._send_json(403, {"error": "acesso negado"})
+            elif isinstance(exc, IsolationViolation):
+                self._send_json(403, {"error": "violação de isolamento"})
+            elif isinstance(exc, GovernanceDenied):
+                self._send_json(403, {"error": "operação recusada (governança)"})
+            elif isinstance(exc, ReplayRejected):
+                self._send_json(409, {"error": "operação já processada (replay)"})
+            elif isinstance(exc, IdempotencyConflict):
+                self._send_json(409, {"error": "idempotency_key reutilizada com conteúdo incompatível"})
+            elif isinstance(exc, (KeyError, ValueError)):
+                self._send_json(400, {"error": "requisição inválida"})
+            else:
+                self._send_json(400, {"error": "não foi possível processar a operação"})
+
+        # -- routing ----------------------------------------------------
+
+        def do_GET(self) -> None:  # noqa: N802
+
+            path_only = self.path.split("?", 1)[0]
+
+            if path_only.startswith("/api/jobs/"):
+
+                job_id = path_only[len("/api/jobs/"):].strip("/")
+
+                if job_id:
+
+                    return self._handle_get_job(job_id)
+
+            if path_only.startswith("/api/supervisor/missions/"):
+                run_id = path_only[len("/api/supervisor/missions/"):].strip("/")
+                if run_id:
+                    return self._handle_get_supervisor_mission(run_id)
+
+            if self.path.startswith("/api/health/operational"):
+                from core.operations.readiness import operational_readiness
+
+                rep = operational_readiness(app.atlas.db_path)
+                return self._send_json(200 if rep["TECHNICALLY_READY"] else 503, rep)
+            if self.path.startswith("/api/health/ready"):
+                # COMANDO 6/6: readiness REAL (rodando ≠ saudável).
+                from core.diagnostics import enterprise_health
+
+                report = enterprise_health(app.atlas.db_path)
+                return self._send_json(503 if report["status"] == "UNHEALTHY" else 200, report)
+            if self.path.startswith("/api/health"):
+                return self._send_json(200, {"status": "ok", "kind": "liveness"})
+            parsed = urlparse(self.path)
+            if parsed.path == "/supervisor":
+                principal, error = self._require_owner_principal()
+                if error:
+                    return self._redirect("/login") if error[0] == 401 else self._send_json(*error)
+                return self._send_html(200, _supervisor_page_html())
+            if parsed.path == "/login":
+                return self._send_html(200, _login_page_html())
+            if parsed.path == "/dashboard":
+                return self._handle_dashboard_page(parsed)
+            if parsed.path == "/api/dashboard":
+                return self._handle_dashboard_json(parsed)
+            self._send_json(404, {"error": "not found"})
+
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path == "/api/login":
+                return self._handle_login()
+            if self.path == "/api/logout":
+                return self._handle_logout()
+            if self.path == "/api/leads":
+                return self._handle_create_lead()
+            if self.path == "/api/sales-events":
+                return self._handle_record_sales_event()
+            if self.path == "/api/finance-entries":
+                return self._handle_record_finance_entry()
+            if self.path == "/api/supervisor/missions":
+                return self._handle_create_supervisor_mission()
+            path_only = self.path.split("?", 1)[0]
+            if path_only.startswith("/api/supervisor/approvals/") and path_only.endswith("/approve"):
+                escalation_id = path_only[len("/api/supervisor/approvals/"):-len("/approve")].strip("/")
+                if escalation_id:
+                    return self._handle_approve_supervisor_escalation(escalation_id)
+            if self.path == "/api/jobs":
+                return self._handle_enqueue_job()
+            self._send_json(404, {"error": "not found"})
+
+        # -- páginas ------------------------------------------------
+
+        def _handle_dashboard_page(self, parsed) -> None:
+            principal = self._require_principal()
+            if principal is None:
+                return self._redirect("/login")
+            query = parse_qs(parsed.query)
+            requested_channel = query.get("channel", [None])[0]
+            try:
+                snapshot = _build_dashboard_snapshot(principal, requested_channel)
+            except Exception as exc:  # noqa: BLE001
+                return self._handle_governed_error(exc)
+            answers = war_room.answer(snapshot)
+            html = _dashboard_page_html(principal.subject, snapshot, answers)
+            self._send_html(200, html)
+
+        def _handle_dashboard_json(self, parsed) -> None:
+            principal = self._require_principal()
+            if principal is None:
+                return self._send_json(401, {"error": "não autenticado"})
+            query = parse_qs(parsed.query)
+            requested_channel = query.get("channel", [None])[0]
+            try:
+                snapshot = _build_dashboard_snapshot(principal, requested_channel)
+            except Exception as exc:  # noqa: BLE001
+                return self._handle_governed_error(exc)
+            self._send_json(200, {"owner": principal.subject, "dashboard": snapshot.__dict__})
+
+        # -- auth -----------------------------------------------------
+
+        def _handle_login(self) -> None:
+            body = self._read_json_body()
+            email = body.get("email", "")
+            password = body.get("password", "")
+
+            try:
+                token = app.auth.login(email, password)
+            except AuthError:
+                app.audit.record(
+                    actor=email or "unknown", action="login", resource="owner_session", outcome="DENIED",
+                    details=sanitize_dict({"email": email}),
+                )
+                return self._send_json(401, {"error": "credenciais inválidas ou indisponíveis"})
+
+            app.audit.record(actor=email, action="login", resource="owner_session", outcome="SUCCESS", details={})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Set-Cookie", f"{SESSION_COOKIE_NAME}={token}; HttpOnly; Path=/; SameSite=Strict" + _secure_attr(self))
+            body_bytes = json.dumps({"status": "ok", "redirect": "/dashboard"}).encode()
+            self.send_header("Content-Length", str(len(body_bytes)))
+            self.end_headers()
+            self.wfile.write(body_bytes)
+
+        def _handle_logout(self) -> None:
+            token = self._current_token()
+            if token:
+                app.auth.logout(token)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            # MICROCORREÇÃO 3: limpa o cookie no navegador (Max-Age=0),
+            # além de revogar a sessão no backend.
+            self.send_header("Set-Cookie", f"{SESSION_COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0" + _secure_attr(self))
+            body_bytes = json.dumps({"status": "ok"}).encode()
+            self.send_header("Content-Length", str(len(body_bytes)))
+            self.end_headers()
+            self.wfile.write(body_bytes)
+
+        # -- mutações governadas --------------------------------------
+        # Todas exigem sessão válida; o Principal usado na autorização
+        # SEMPRE vem de `_require_principal()` (sessão verificada),
+        # nunca de campos do corpo da requisição.
+
+        def _handle_create_lead(self) -> None:
+            principal = self._require_principal()
+            if principal is None:
+                return self._send_json(401, {"error": "não autenticado"})
+            body = self._read_json_body()
+            try:
+                lead = app.facade.create_lead(
+                    principal,
+                    channel_id=body.get("channel_id"),
+                    idempotency_key=body.get("idempotency_key"),
+                    operation_id=body.get("operation_id"),
+                    source=body.get("source", "UNKNOWN"),
+                    campaign=body.get("campaign"),
+                )
+                return self._send_json(201, {"lead_id": lead.lead_id, "status": lead.status.value})
+            except Exception as exc:  # noqa: BLE001
+                return self._handle_governed_error(exc)
+
+        def _handle_record_sales_event(self) -> None:
+            principal = self._require_principal()
+            if principal is None:
+                return self._send_json(401, {"error": "não autenticado"})
+            body = self._read_json_body()
+            try:
+                value_type_raw = body.get("value_type", "UNKNOWN")
+                event = app.facade.record_sales_event(
+                    principal,
+                    channel_id=body.get("channel_id"),
+                    event_type=body.get("event_type"),
+                    value_type=ValueType(value_type_raw),
+                    amount=body.get("amount"),
+                    idempotency_key=body.get("idempotency_key"),
+                    operation_id=body.get("operation_id"),
+                )
+                return self._send_json(201, {"event_id": event.event_id})
+            except Exception as exc:  # noqa: BLE001
+                return self._handle_governed_error(exc)
+
+        def _handle_record_finance_entry(self) -> None:
+            principal = self._require_principal()
+            if principal is None:
+                return self._send_json(401, {"error": "não autenticado"})
+            body = self._read_json_body()
+            try:
+                entry = app.facade.record_finance_entry(
+                    principal,
+                    entry_type=body.get("entry_type"),
+                    amount=body.get("amount"),
+                    channel_id=body.get("channel_id"),
+                    description=body.get("description", ""),
+                    idempotency_key=body.get("idempotency_key"),
+                    operation_id=body.get("operation_id"),
+                )
+                return self._send_json(201, {"entry_id": entry.entry_id})
+            except Exception as exc:  # noqa: BLE001
+                return self._handle_governed_error(exc)
+
+        def _handle_create_supervisor_mission(self) -> None:
+            principal, error = self._require_owner_principal()
+            if error:
+                return self._send_json(*error)
+            body = self._read_json_body()
+            objective = str(body.get("objective") or "").strip()
+            raw_steps = body.get("steps")
+            if not objective or not isinstance(raw_steps, list) or not raw_steps:
+                return self._send_json(400, {"error": "objective e steps são obrigatórios"})
+            if len(raw_steps) > 100:
+                return self._send_json(400, {"error": "plano excede 100 passos"})
+            try:
+                from navigator.planning import OperationPlanner, OperationRunner, StepSpec
+
+                steps = [StepSpec(**item) if isinstance(item, dict) else item for item in raw_steps]
+                planner = OperationPlanner(
+                    bridge_hub=app.atlas.bridge,
+                    evidence_gate=getattr(app.atlas, "evidence_gate", None),
+                )
+                # Apenas cria o plano persistido. A execução fica com o worker vivo do Growth.
+                creator = OperationRunner(
+                    db_path=app.atlas.db_path,
+                    planner=planner,
+                    navigator=None,
+                    escalation_desk=None,
+                    actor=f"SUPERVISOR:{principal.subject}",
+                )
+                run_id = creator.create_run(
+                    objective=objective,
+                    steps=steps,
+                    requested_by=f"SUPERVISOR:{principal.subject}",
+                )
+                job = app.facade.enqueue_job(
+                    principal,
+                    job_type="navigator_run_advance",
+                    idempotency_key=f"supervisor:{run_id}:tick:0",
+                    channel_id=body.get("channel_id"),
+                    project_id=body.get("project_id"),
+                    payload={"run_id": run_id, "tick": 0},
+                    operation_id=f"supervisor:{run_id}:enqueue",
+                )
+                app.audit.record(
+                    actor=principal.subject,
+                    action="supervisor_create_mission",
+                    resource=f"navigator_run:{run_id}",
+                    outcome="SUCCESS",
+                    details=sanitize_dict({"objective": objective, "steps": len(steps), "job_id": job.job_id}),
+                )
+                return self._send_json(201, {
+                    "run_id": run_id,
+                    "job_id": job.job_id,
+                    "state": getattr(job.state, "value", str(job.state)),
+                })
+            except Exception as exc:  # noqa: BLE001
+                app.audit.record(
+                    actor=principal.subject,
+                    action="supervisor_create_mission",
+                    resource="navigator_run",
+                    outcome="DENIED",
+                    details=sanitize_dict({"error_type": type(exc).__name__}),
+                )
+                return self._handle_governed_error(exc)
+
+        def _handle_get_supervisor_mission(self, run_id: str) -> None:
+            principal, error = self._require_owner_principal()
+            if error:
+                return self._send_json(*error)
+            try:
+                from core.models import db as db_module
+
+                with db_module.connect(app.atlas.db_path) as conn:
+                    row = conn.execute(
+                        "SELECT run_id, objective, requested_by, plan_json, steps_state_json, status, "
+                        "created_at, updated_at FROM navigator_operation_runs WHERE run_id = ?",
+                        (run_id,),
+                    ).fetchone()
+                if row is None:
+                    return self._send_json(404, {"error": "mission not found"})
+                return self._send_json(200, {
+                    "run_id": row["run_id"],
+                    "objective": row["objective"],
+                    "requested_by": row["requested_by"],
+                    "status": row["status"],
+                    "plan": json.loads(row["plan_json"]),
+                    "steps_state": json.loads(row["steps_state_json"]),
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                })
+            except Exception as exc:  # noqa: BLE001
+                return self._handle_governed_error(exc)
+
+        def _handle_approve_supervisor_escalation(self, escalation_id: str) -> None:
+            principal, error = self._require_owner_principal()
+            if error:
+                return self._send_json(*error)
+            body = self._read_json_body()
+            decision = str(body.get("decision") or "Owner approved via Supervisor Gateway").strip()
+            try:
+                item = app.atlas.escalation_desk.approve(
+                    escalation_id,
+                    decision=decision,
+                    resolved_by=principal,
+                )
+                from core.models import db as db_module
+
+                run_id = None
+                with db_module.connect(app.atlas.db_path) as conn:
+                    row = conn.execute(
+                        "SELECT run_id FROM navigator_operation_runs WHERE steps_state_json LIKE ? "
+                        "ORDER BY updated_at DESC LIMIT 1",
+                        (f"%{escalation_id}%",),
+                    ).fetchone()
+                    if row is not None:
+                        run_id = row["run_id"]
+                job_id = None
+                if run_id:
+                    job = app.facade.enqueue_job(
+                        principal,
+                        job_type="navigator_run_advance",
+                        idempotency_key=f"supervisor:{run_id}:approval:{escalation_id}",
+                        payload={"run_id": run_id, "tick": 1},
+                        operation_id=f"supervisor:{run_id}:approval:{escalation_id}",
+                    )
+                    job_id = job.job_id
+                return self._send_json(200, {
+                    "escalation_id": escalation_id,
+                    "status": getattr(item.status, "value", str(item.status)),
+                    "run_id": run_id,
+                    "job_id": job_id,
+                })
+            except Exception as exc:  # noqa: BLE001
+                return self._handle_governed_error(exc)
+
+        def _handle_get_job(self, job_id: str) -> None:
+            principal = self._require_principal()
+
+            if principal is None:
+                return self._send_json(
+                    401,
+                    {"error": "n?o autenticado"},
+                )
+
+            job = app.job_queue.get(job_id)
+
+            if job is None:
+                return self._send_json(
+                    404,
+                    {"error": "job not found"},
+                )
+
+            state = getattr(
+                job.state,
+                "value",
+                str(job.state),
+            )
+
+            return self._send_json(
+                200,
+                {
+                    "job_id": job.job_id,
+                    "job_type": job.job_type,
+                    "state": state,
+                    "attempts": job.attempts,
+                    "max_attempts": job.max_attempts,
+                    "result": job.result,
+                    "error": job.error,
+                    "created_at": job.created_at,
+                    "updated_at": job.updated_at,
+                },
+            )
+
+        def _handle_enqueue_job(self) -> None:
+            principal = self._require_principal()
+            if principal is None:
+                return self._send_json(401, {"error": "não autenticado"})
+            body = self._read_json_body()
+            try:
+                job = app.facade.enqueue_job(
+                    principal,
+                    job_type=body.get("job_type"),
+                    idempotency_key=body.get("idempotency_key"),
+                    channel_id=body.get("channel_id"),
+                    project_id=body.get("project_id"),
+                    payload=body.get("payload"),
+                    operation_id=body.get("operation_id"),
+                )
+                return self._send_json(201, {"job_id": job.job_id, "state": job.state.value})
+            except Exception as exc:  # noqa: BLE001
+                return self._handle_governed_error(exc)
+
+        def log_message(self, format: str, *args) -> None:  # silencia logs padrão em testes
+            pass
+
+    return Handler
+
+
+def run_server(host: str = "127.0.0.1", port: int = 8787, app: GrowthStudioApp | None = None) -> HTTPServer:
+    builds_own_app = app is None
+    app = app or build_app()
+    # v1.0.5 (auditoria de readiness 1.0.4, bloqueador 1): quando este entrypoint
+    # CONSTRÓI a própria aplicação (ex.: `python api/server.py`), ativa a camada
+    # operacional — nunca sobe em modo biblioteca. Quem passa o próprio `app`
+    # (main.py, que já configurou; ou quem embute o servidor) não tem o estado
+    # global do processo alterado.
+    if builds_own_app:
+        from core.operations.runtime import configure_operational
+
+        configure_operational(app)
+    handler = make_handler(app)
+    server = HTTPServer((host, port), handler)
+    return server
+
+
+if __name__ == "__main__":  # pragma: no cover
+    srv = run_server()
+    print(f"MULTIVERSO GROWTH STUDIO API rodando em http://{srv.server_address[0]}:{srv.server_address[1]}")
+    print(f"Login: http://{srv.server_address[0]}:{srv.server_address[1]}/login")
+    srv.serve_forever()

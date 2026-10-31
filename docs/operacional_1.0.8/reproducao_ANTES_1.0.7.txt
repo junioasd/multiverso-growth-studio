@@ -1,0 +1,17 @@
+# ANTES — pacote 1.0.7 auditado (123dd1a9…)
+=== B1: moeda inexistente ZZZ
+   valid_currency('ZZZ') = True
+   set_limit 100 ZZZ: ACEITO
+   preview 1 ZZZ: AUTHORIZED
+=== B2: migracao FX acima de MAX_MONEY
+   migracao USD->EUR fx=1e12: {'provider': 'big', 'from': 'USD', 'to': 'EUR', 'fx_rate': 1000000000000.0, 'migration_id': 1}
+   limite persistido: (1e+24, 'EUR')
+   preview 1e12 EUR: AUTHORIZED
+=== B3: write-off de SETTLEMENT_STATE_CONFLICT
+   write-off: {'incident_id': 'inc_b3fc33772667', 'status': 'RECONCILED', 'reconciliation': 'WRITE_OFF', 'final_amount': None}
+   reserva apos write-off: HELD_CONFLICT | open_reservations lista? False
+   migracao USD->EUR depois: REJEITADO ValueError: BUDGET_CURRENCY_CHANGE_REQUIRES_RECONCILIATION: 1 reserva(s) e 0 incid
+=== B4: record_usage sem custo e sem reserva
+   record_usage: {'usage_id': 2, 'cost_status': 'COST_UNKNOWN'}
+   incidentes criados: 0 | proxima autorizacao: COST_RECONCILIATION_REQUIRED
+   existe metodo para reconciliar usage_id? False

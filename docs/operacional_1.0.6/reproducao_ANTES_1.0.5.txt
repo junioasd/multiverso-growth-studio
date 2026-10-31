@@ -1,0 +1,13 @@
+# ANTES — pacote 1.0.5 auditado (0b1476fb…)
+=== B1: unknown_cost_upper_bound = 0
+   set_limit(ub=0): ACEITO
+   2 chamadas sem custo: available=[True, True] hits=['/gen', '/gen'] incidentes=0 ledger={'calls': 2, 'known_cost': 0, 'calls_cost_unknown': 2, 'budget_charged': 2.0}
+=== B2: duas reconciliacoes concorrentes do mesmo incidente
+   resultados: {10.0: 'RECONCILED', 20.0: 'RECONCILED'} | ledger m = 20.0
+=== B3: limite trocado de USD para EUR com historico em USD
+   set_limit EUR: ACEITO
+   preview EUR 40: AUTHORIZED | EUR 60: LIMIT_EXCEEDED (os 50 USD contados como EUR?)
+=== B4: settle contraditorio
+   A NOT_EXECUTED + custo 100: {'reservation_id': 'rsv_910298677ed94562', 'status': 'RELEASED', 'cost_status': 'NOT_EXECUTED', 'budget_charge': 0.0}
+   B UNKNOWN + custo 100: {'reservation_id': 'rsv_2f545d5ec60d45c6', 'status': 'HELD_UNKNOWN', 'cost_status': 'COST_UNKNOWN', 'budget_charge': 1.0}
+   ledger c = 0.0 | incidentes c = 0 | ledger c2 = 1.0 | incidentes c2 = 0

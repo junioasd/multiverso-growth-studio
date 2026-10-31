@@ -1,0 +1,24 @@
+# ANTES — pacote 1.0.9 auditado (05e6d7ef…)
+=== B1: correlation_id reaproveitado com payload divergente (limite USD 100)
+   nova USD 500: LIMIT_EXCEEDED
+   cid + USD 500 + outro project: {'authorized': True, 'code': 'AUTHORIZED', 'already_reserved': True}
+=== B2: reservation_id com service/operation/provider divergentes
+   service/operation WRONG: {'usage_id': None, 'cost_status': 'ESTIMATED', 'reservation_id': 'rsv_dee9cf27680c46db', 'settled': 'COMMITTED'}
+   provider q com reserva de p: {'usage_id': None, 'cost_status': 'ESTIMATED', 'reservation_id': 'rsv_3788f0ec182c4edc', 'settled': 'COMMITTED'}
+   status r1/r2: [('COMMITTED',), ('COMMITTED',)]
+=== B3: mesmo uso sem reserva registrado 2x (teto 100)
+   usos: 3 | 4 | incidentes abertos: 2
+   total cobrado: 200.0
+=== B4: retirada de ZZZ com incidente aberto que referencia ZZZ no snapshot
+   incidente: [(None, 'ZZZ', 'OPEN')]
+   retire: {'provider': 'lz', 'retired': ['ZZZ']}
+   limites restantes: []
+=== B5: reconcile_usage em moeda nao suportada ZZZ
+   reconcile_usage final 5 ZZZ: {'incident_id': 'inc_aec319ed863c', 'status': 'RECONCILED', 'reconciliation': 'FINAL_AMOUNT', 'final_amount': 5.0}
+   lancamento: [(5.0, 'ZZZ', 5.0, 'RECONCILED')]
+=== LIFECYCLE: authorize com correlation_id de reserva ja COMMITTED
+   retry: {'authorized': True, 'code': 'AUTHORIZED', 'already_reserved': True}
+=== B3 (identidade): o mesmo evento com usage_event_id, 2x
+   parametro usage_event_id inexistente nesta versao — sem identidade idempotente
+=== B4 (saida): recuperacao legada com incidente aberto e reconciliacao do uso pela taxa registrada
+   sem saida: ValueError CURRENCY_RETIREMENT_REQUIRES_RECONCILIATION: 1 reserva(s)/incidente(s) pendentes

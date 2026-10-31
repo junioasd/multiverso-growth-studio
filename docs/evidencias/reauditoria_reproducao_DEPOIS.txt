@@ -1,0 +1,10 @@
+ETAPA 1 (codigo do MASTER anterior 9b498594…):
+schema ANTIGO tem event_fingerprints_json? False
+
+ETAPA 2 com a versao CORRIGIDA — DEPOIS:
+apos migracao: ('["g_old"]', '{}')
+  replay divergente valor=1.0 evidence=tampered    -> REJEITADO JourneyConflict: evento 'g_old' já processado no pedido legacy_real com CONTEÚDO DIFERE
+  replay divergente valor=999 evidence=original    -> REJEITADO JourneyConflict: evento 'g_old' já processado no pedido legacy_real com CONTEÚDO DIFERE
+  replay EQUIVALENTE valor=100 evidence=original   -> ACEITO (PAID)
+  refund legado divergente (40)                     -> REJEITADO JourneyConflict
+receitas: (2, 300.0) | reembolsos: (1, 80.0) | vendas: 2

@@ -1,0 +1,11 @@
+# ANTES — pacote 1.0.3 auditado (58eaac3e…)
+=== B1: kill switch NAO configurado
+   estado: NOT_CONFIGURED | available = True | hits = ['/search1']
+   com APP_ENV=production: available = True | hits = ['/search1', '/search1p']
+=== B2: kill switch ativado DEPOIS da pre-checagem, ANTES do transporte
+   estado: ENABLED | available = True | hits = ['/search2']
+=== B3: reserva USD 1, custo real EUR 100
+   settle: {'reservation_id': 'rsv_5a1fd3451ad840d7', 'status': 'COMMITTED', 'cost_status': 'COST_UNKNOWN', 'budget_charge': 1.0} | incidentes abertos: 0 | proxima reserva USD 1: AUTHORIZED
+=== B4: HttpSearchProvider com CostGuard configurado e SEM limite
+   sem classificacao: available = True | motivo:  | hits = ['/search4'] | ledger: vazio
+   classificado como PAGO, sem limite: available = True | motivo:  | hits = ['/search4', '/search4b']

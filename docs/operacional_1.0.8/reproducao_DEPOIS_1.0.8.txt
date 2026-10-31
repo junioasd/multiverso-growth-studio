@@ -1,0 +1,17 @@
+# DEPOIS — 1.0.8 candidate
+=== B1: moeda inexistente ZZZ
+   valid_currency('ZZZ') = False
+   set_limit 100 ZZZ: REJEITADO ValueError: UNSUPPORTED_CURRENCY: 'ZZZ' fora da política ['BRL', 'EUR', 'GBP', 'US
+   preview 1 ZZZ: INVALID_CURRENCY
+=== B2: migracao FX acima de MAX_MONEY
+   migracao USD->EUR fx=1e12: REJEITADO ValueError: FX_CONVERSION_OUT_OF_RANGE: 1000000000000.0 × 1000000000000.0 = 1e+24 
+   limite persistido: (1000000000000.0, 'USD')
+   preview 1e12 EUR: CURRENCY_MISMATCH
+=== B3: write-off de SETTLEMENT_STATE_CONFLICT
+   write-off: {'incident_id': 'inc_3f171aa7ab33', 'status': 'RECONCILED', 'reconciliation': 'WRITE_OFF', 'final_amount': None}
+   reserva apos write-off: WRITTEN_OFF | open_reservations lista? False
+   migracao USD->EUR depois: {'provider': 'w', 'from': 'USD', 'to': 'EUR', 'fx_rate': 0.9, 'migration_id': 1}
+=== B4: record_usage sem custo e sem reserva
+   record_usage: {'usage_id': 2, 'cost_status': 'COST_UNKNOWN', 'incident_id': 'inc_433b70927f4f'}
+   incidentes criados: 1 | proxima autorizacao: COST_INCIDENT_REVIEW_REQUIRED
+   existe metodo para reconciliar usage_id? True

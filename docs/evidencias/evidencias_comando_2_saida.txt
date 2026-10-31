@@ -1,0 +1,41 @@
+==============================================================================
+1. SEPARAÇÃO FATO / INFERÊNCIA / HIPÓTESE / PREVISÃO
+==============================================================================
+- revenue: FATO OBSERVADO: revenue = 300.0
+    FACT           300.0 fonte=finance_ledger ref=finance_entries[channel_id=chan_1;n=2;last=1790227619.207]
+    FACT           300.0 fonte=sales_tracking ref=sales_events[channel_id=chan_1;value_type=REAL;n=42;last=1790227619.184]
+    FORECAST       900.0 base='eventos FORECAST lançados no rastreamento'
+    INFERENCE      150.0 base='eventos ESTIMATED lançados no rastreamento'
+- margin: FATO OBSERVADO: margin = 180.0
+    FACT           180.0 fonte=finance_ledger ref=finance_entries[channel_id=chan_1;n=2;last=1790227619.207];margin=revenue-(expense+realized_cost+commission)
+- conversion_rate: FATO OBSERVADO: conversion_rate = 0.05
+    FACT            0.05 fonte=sales_tracking ref=sales_events[channel_id=chan_1;value_type=REAL;n=42;last=1790227619.184];ratio=sale/click
+- audience_size: DESCONHECIDO: não há registro sobre audience_size
+
+==============================================================================
+2. CONFLITO ENTRE FONTES E DECISÃO BLOQUEADA
+==============================================================================
+- revenue chan_2: CONFLITO entre fontes para revenue — nenhum valor é afirmado | fontes vigentes DISCORDAM: finance_ledger=300.0; sales_tracking=450.0
+- decisão: BLOCKED | motivos: ['channel:chan_2.revenue = CONFLICT (fontes vigentes DISCORDAM: finance_ledger=300.0; sales_tracking=450.0)', 'channel:chan_2.margin = UNKNOWN (nenhuma afirmação registrada — estado DESCONHECIDO (nada inventado))']
+
+==============================================================================
+3. CICLO ADAPTATIVO (dados reais, controle = diferença-em-diferenças)
+==============================================================================
+observar/interpretar: linha de base FATO camp_t=0.02, camp_c=0.02, camp_bad=0.04
+hipóteses registradas como HYPOTHESIS no Gêmeo; previsões como FORECAST; previsão também no loop com baseline
+ rodada 1: [controlado] previsto=0.0500 real(DiD)=0.0350 erro=0.0150 dir_ok=True | [refutável] previsto=0.0600 real=0.0250 dir_ok=False
+ rodada 2: [controlado] previsto=0.0500 real(DiD)=0.0400 erro=0.0100 dir_ok=True | [refutável] previsto=0.0450 real=0.0200 dir_ok=False
+ rodada 3: [controlado] previsto=0.0500 real(DiD)=0.0425 erro=0.0075 dir_ok=True | [refutável] previsto=0.0400 real=0.0175 dir_ok=False
+ rodada 4: [controlado] previsto=0.0500 real(DiD)=0.0440 erro=0.0060 dir_ok=True | [refutável] previsto=0.0375 real=0.0160 dir_ok=False
+ rodada 5: [controlado] previsto=0.0500 real(DiD)=0.0450 erro=0.0050 dir_ok=True | [refutável] previsto=0.0360 real=0.0150 dir_ok=False
+- novo gancho eleva a conversão: status=VALIDATED causal=CAUSAL_SUPPORTED avaliação={"validation": "VALIDATED", "rounds_measured": 5, "direction_accuracy": 1.0, "mean_real_effect": 0.004999999999999999}
+- thumbnail escura eleva a conversão: status=ABANDONED causal=REFUTED avaliação={"validation": "CONTRADICTED", "rounds_measured": 5, "direction_accuracy": 0.0, "mean_real_effect": -0.005}
+- adaptar camp_t: SCALE — efeito validado com grupo de controle
+- adaptar camp_bad: ABANDON — todas as estratégias testadas foram refutadas
+- Owner propõe escalar camp_bad -> DISAGREED: a realidade REFUTOU esta estratégia (avaliação: {"validation": "CONTRADICTED", "rounds_mea
+
+==============================================================================
+4. MEMÓRIA APÓS RESTART
+==============================================================================
+- nova sessão recupera decisão dec_7ca12932d94d4db7: BLOCKED | bloqueada por evidência insuficiente (pretendido: aumentar orçamento)
+- estratégias recuperadas: [('VALIDATED', 'CAUSAL_SUPPORTED'), ('ABANDONED', 'REFUTED')]

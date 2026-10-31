@@ -1,0 +1,15 @@
+# ANTES — pacote 1.0.4 auditado (b49238a0…)
+=== B1: entrypoint api/server.py (run_server) sem main.py
+   apos run_server(): kill switch = NOT_CONFIGURED_LIBRARY_MODE | CostGuard global = None
+   busca PAGA sem limite: available = True | hits = ['/search']
+=== B2: limite do Owner = USD 0,00; estimativa 0; provedor nao informa custo
+   search=True generation=True | hits=['/search', '/gen'] | ledger={'http_generation_provider/USD': 0.0, 'http_search_provider/USD': 0.0} | incidentes=0
+=== B3: incidente de moeda 'resolvido' so com texto
+   resolve so com texto: ACEITO
+   apos resolve: ledger m = {'calls': 1, 'known_cost': 0, 'calls_cost_unknown': 1, 'budget_charged': 1.0} | proxima reserva USD 1: AUTHORIZED
+=== B4: settle repetido com conteudo divergente
+   1a: {'reservation_id': 'rsv_efad0afcc32c4f00', 'status': 'COMMITTED', 'cost_status': 'ESTIMATED', 'budget_charge': 1.0}
+   2a (100): {'reservation_id': 'rsv_efad0afcc32c4f00', 'status': 'COMMITTED', 'already_settled': True}
+   ledger r = 1.0 | incidentes r = 0
+=== OBS: navegador — trava ativada durante page.goto
+   chamadas: ['goto', 'evaluate'] | estado: ENABLED | success = False

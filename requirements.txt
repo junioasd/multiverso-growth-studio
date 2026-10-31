@@ -1,0 +1,50 @@
+# MULTIVERSO GROWTH STUDIO - dependências reais
+#
+# MICROCORREÇÃO (item 3 — instalação limpa): lista completa e
+# verificada de TODAS as dependências de terceiros genuinamente
+# importadas pelo código (confirmado por varredura estática de todos
+# os arquivos .py do projeto — nenhuma biblioteca "assumida como já
+# instalada" ficou de fora). Todas são bibliotecas livres/open-source
+# (nunca uma API paga obrigatória) — a filosofia de "sem custo
+# obrigatório" continua: o sistema funciona (em modo honestamente
+# limitado, reportando UNAVAILABLE onde aplicável) mesmo sem
+# credenciais externas configuradas, mas AS BIBLIOTECAS abaixo
+# precisam estar instaladas para o código sequer importar sem erro.
+#
+# Instalação:
+#   pip install -r requirements.txt
+#   playwright install chromium   # OBRIGATÓRIO — ver nota abaixo
+
+# --- Multimodal (core/multimodal/real_*.py) ---
+Pillow>=10.0.0          # RealImageAnalyzer/RealScreenshotAnalyzer — análise real de imagem
+pypdf>=4.0.0             # RealPdfAnalyzer — extração real de texto/metadados de PDF
+python-docx>=1.1.0       # RealDocxAnalyzer — extração real de texto de DOCX
+opencv-python>=4.8.0     # RealVideoAnalyzer — análise real de quadros de vídeo
+numpy>=1.24.0            # dependência de opencv-python para manipulação de quadros
+
+# --- Access & Execution Hub (bridge/execution/*.py) ---
+cryptography>=41.0.0     # TokenVault — criptografia real (Fernet/AES) do cofre de segredos
+oauthlib>=3.2.0          # OAuth2Flow — construção real de URL/corpo de requisição OAuth2
+playwright>=1.40.0       # BrowserExecutor/RadarReal — automação real de navegador (fallback)
+
+# NOTA CRÍTICA sobre o Playwright:
+# `pip install playwright` instala APENAS a biblioteca Python — os
+# BINÁRIOS de navegador (Chromium) são baixados separadamente e NÃO
+# estão incluídos neste requirements.txt (são artefatos binários, não
+# um pacote pip). Depois de instalar as dependências Python, rode:
+#
+#     playwright install chromium
+#
+# (ou `playwright install --with-deps chromium` em uma distribuição
+# Linux mínima, para também instalar as bibliotecas de sistema
+# operacional que o Chromium headless requer). Sem esse passo,
+# `BrowserExecutor` detecta a ausência do binário e retorna
+# `UNAVAILABLE` explicitamente — nunca falha de forma obscura, nunca
+# finge que a automação de navegador funcionou.
+#
+# audioop (usado por core/multimodal/real_audio_video_analyzer.py)
+# faz parte da biblioteca padrão do Python até a versão 3.12 —
+# removido a partir do Python 3.13 (PEP 594). Este projeto foi
+# desenvolvido/testado em Python 3.12; em 3.13+, seria necessário
+# substituir por um pacote externo equivalente (ex: `audioop-lts`) —
+# não incluído aqui pois não é necessário no ambiente de referência.

@@ -1,0 +1,57 @@
+﻿# ==========================================
+# SEGURANÇA E CREDENCIAIS
+# ==========================================
+.env
+.env.local
+.env.*
+*.key
+*.pem
+
+# EXCEÇÃO: Preservar estritamente o exemplo oficial sem credenciais
+!.env.example
+
+# ==========================================
+# PYTHON, COMPILAÇÕES E CACHES
+# ==========================================
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# ==========================================
+# BANCOS DE DADOS E DADOS OPERACIONAIS
+# ==========================================
+*.db
+*.sqlite3
+data/*.db
+data/*.sqlite3
+
+# ==========================================
+# ARQUIVOS TEMPORÁRIOS, LOGS E BACKUPS
+# ==========================================
+*.log
+*.bak
+*.swp
+*~
+
+# ==========================================
+# RELATÓRIOS ESPECÍFICOS DE TESTES E SAÍDAS LOCAIS
+# ==========================================
+full_suite_after_deps.txt
+full_suite_after_pipeline1_fix.txt
+pipeline1_result.txt
+pipeline1_result_after_fix.txt
+six_remaining_tests.txt
+_diag_*.py
+
+# Proteção dos arquivos auxiliares SQLite
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite3-shm
+*.sqlite3-wal
+*.sqlite3-journal

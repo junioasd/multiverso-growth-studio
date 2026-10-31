@@ -1,0 +1,458 @@
+"""
+navigator.planning
+====================
+COMANDO 3/6 — NAVIGATOR como PLANEJADOR e EXECUTOR DE PLANOS.
+
+Faltava ao NAVIGATOR a camada que transforma um objetivo aprovado em um
+plano executável e o conduz até o fim de forma retomável. Este módulo só
+COMPÕE estruturas existentes — nenhuma reimplementação:
+
+- roteamento: `bridge.hub.BridgeHub.best_available_execution_path`
+  (API oficial → conector/MCP/webhook → navegador/RPA);
+- criticidade/aprovação: `PolicyActionRegistry` + `NavigatorReal`
+  (aprovação do Owner vinculada ao fingerprint dos parâmetros; claim
+  anti-replay; UNKNOWN_OUTCOME nunca reenviado — ver correções D1/D3);
+- pré-condições factuais: `atlas.digital_twin.EvidenceGate`;
+- preparação/validação: `forge.preparation.ExecutionPreparer`;
+- backoff: `bridge.execution.webhooks.RetryPolicy`;
+- evidência operacional: `bridge.execution.observability.ExecutionObservability`.
+
+Escada de evidência por passo (nunca "concluído" só porque foi enviado):
+PLANNED → (WAITING_APPROVAL → APPROVED) → RUNNING → ACCEPTED | EXECUTED →
+CONFIRMED. Estados de falha: RETRYING, FAILED, BLOCKED, UNKNOWN, CANCELLED.
+Plano: PLANNED | RUNNING | WAITING_APPROVAL | SUCCEEDED | PARTIAL | FAILED |
+BLOCKED | CANCELLED.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+import uuid
+from dataclasses import asdict, dataclass, field
+
+from bridge.execution.policy_registry import ActionCriticality, PolicyActionRegistry
+from bridge.execution.webhooks import RetryPolicy
+from core.models import db as db_module
+from forge.preparation import ExecutionPreparer, payload_hash
+
+_IRREVERSIBLE_KEYWORDS = ("PUBLISH", "DELETE", "SPEND", "PAY", "SEND", "TRANSFER", "REMOVE", "POST", "UPLOAD")
+_DONE = ("EXECUTED", "CONFIRMED")
+_TERMINAL = ("CONFIRMED", "EXECUTED", "FAILED", "BLOCKED", "UNKNOWN", "CANCELLED")
+
+
+class PlanValidationError(ValueError):
+    pass
+
+
+@dataclass
+class StepSpec:
+    step_id: str
+    platform: str
+    action: str
+    adapter_method: str
+    params: dict
+    depends_on: list = field(default_factory=list)
+    required_params: list = field(default_factory=list)
+    preconditions: list = field(default_factory=list)   # [(entity_type, entity_id, attribute)]
+    success_result_keys: list = field(default_factory=list)
+    verify_method: str | None = None                    # leitura de confirmação (API oficial)
+    verify_param_from_result: dict = field(default_factory=dict)  # {param_do_verify: chave_do_resultado}
+    estimated_cost: float | None = None
+    max_attempts: int = 3
+
+
+@dataclass
+class PlannedStep:
+    spec: StepSpec
+    order: int
+    mechanism: str | None
+    criticality: str
+    irreversible: bool
+    payload_hash: str
+    blocked_reasons: list
+
+
+def _topological_order(specs: list) -> list:
+    ids = [s.step_id for s in specs]
+    if len(set(ids)) != len(ids):
+        raise PlanValidationError("step_id duplicado no plano")
+    by_id = {s.step_id: s for s in specs}
+    for s in specs:
+        for d in s.depends_on:
+            if d not in by_id:
+                raise PlanValidationError(f"passo '{s.step_id}' depende de '{d}', inexistente")
+    order, state = [], {}
+
+    def visit(sid, stack):
+        if state.get(sid) == "done":
+            return
+        if state.get(sid) == "visiting":
+            raise PlanValidationError("dependência circular: " + " -> ".join(stack + [sid]))
+        state[sid] = "visiting"
+        for d in by_id[sid].depends_on:
+            visit(d, stack + [sid])
+        state[sid] = "done"
+        order.append(sid)
+
+    for s in specs:
+        visit(s.step_id, [])
+    return order
+
+
+class OperationPlanner:
+    def __init__(self, *, bridge_hub, policy_registry: PolicyActionRegistry | None = None, evidence_gate=None,
+                 preparer: ExecutionPreparer | None = None) -> None:
+        self.bridge_hub = bridge_hub
+        self.policy = policy_registry or PolicyActionRegistry()
+        self.gate = evidence_gate
+        self.preparer = preparer or ExecutionPreparer()
+
+    def plan(self, *, objective: str, steps: list) -> dict:
+        """Analisa e ordena os passos e DETECTA BLOQUEIOS ANTES de executar."""
+        if not objective or not steps:
+            raise PlanValidationError("objetivo e passos são obrigatórios")
+        order = _topological_order(steps)
+        by_id = {s.step_id: s for s in steps}
+        planned = []
+        for idx, sid in enumerate(order):
+            s = by_id[sid]
+            reasons = []
+            best = self.bridge_hub.best_available_execution_path(platform=s.platform)
+            if best is None:
+                reasons.append(f"nenhum caminho legítimo de execução para '{s.platform}'")
+            criticality = self.policy.effective_criticality(action=s.action, caller_requested=ActionCriticality.ROUTINE)
+            prep = self.preparer.prepare(step_id=sid, platform=s.platform, action=s.action,
+                                         adapter_method=s.adapter_method, params=s.params,
+                                         required_params=s.required_params)
+            if not prep.ready:
+                reasons.append(prep.reason())
+            if s.preconditions:
+                if self.gate is None:
+                    reasons.append("pré-condições factuais declaradas, mas nenhum EvidenceGate disponível")
+                else:
+                    from atlas.digital_twin import EvidenceRequirement
+
+                    assessment = self.gate.assess([EvidenceRequirement(*p) for p in s.preconditions])
+                    reasons.extend(assessment.reasons())
+            planned.append(PlannedStep(
+                spec=s, order=idx, mechanism=best.connector_type.value if best else None,
+                criticality=criticality.value,
+                irreversible=criticality == ActionCriticality.CRITICAL
+                and any(k in s.action.upper() for k in _IRREVERSIBLE_KEYWORDS),
+                payload_hash=payload_hash(platform=s.platform, action=s.action, adapter_method=s.adapter_method,
+                                          params=s.params),
+                blocked_reasons=reasons,
+            ))
+        known = [p.spec.estimated_cost for p in planned if p.spec.estimated_cost is not None]
+        return {
+            "objective": objective, "steps": planned,
+            "blocked": [p.spec.step_id for p in planned if p.blocked_reasons],
+            "requires_owner_approval": [p.spec.step_id for p in planned if p.criticality == "CRITICAL"],
+            "irreversible": [p.spec.step_id for p in planned if p.irreversible],
+            "estimated_cost": sum(known) if len(known) == len(planned) else "UNKNOWN",
+        }
+
+
+class OperationRunner:
+    """Conduz um plano passo a passo com CHECKPOINT persistido a cada
+    transição. `advance()` é idempotente e retomável: pode ser chamado
+    após crash/restart por outra instância — passos concluídos nunca se
+    repetem; passo RUNNING interrompido é reconduzido pelo claim do
+    `NavigatorReal` (cache, UNKNOWN_OUTCOME ou espera), nunca reenviado às
+    cegas."""
+
+    def __init__(self, *, db_path: str, planner: OperationPlanner, navigator, escalation_desk, actor: str,
+                 observability=None, retry_policy: RetryPolicy | None = None) -> None:
+        self.db_path, self.planner, self.navigator = db_path, planner, navigator
+        self.desk, self.actor, self.observability = escalation_desk, actor, observability
+        self.retry = retry_policy or RetryPolicy(max_attempts=3, base_delay_seconds=0.5, max_delay_seconds=5.0)
+
+    # ------------------------------------------------------------ criação
+    def create_run(self, *, objective: str, steps: list, requested_by: str) -> str:
+        plan = self.planner.plan(objective=objective, steps=steps)
+        run_id = f"run_{uuid.uuid4().hex[:12]}"
+        now = time.time()
+        state = {}
+        for p in plan["steps"]:
+            state[p.spec.step_id] = {
+                "status": "BLOCKED" if p.blocked_reasons else "PLANNED", "reasons": list(p.blocked_reasons),
+                "attempts": 0, "next_attempt_at": 0.0, "escalation_id": None, "delivery": None,
+                "external_id": None, "result_data": None, "evidence": {"planned_at": now},
+            }
+        plan_json = {
+            "objective": objective, "estimated_cost": plan["estimated_cost"], "irreversible": plan["irreversible"],
+            "steps": [{**asdict(p.spec), "order": p.order, "mechanism": p.mechanism, "criticality": p.criticality,
+                       "irreversible": p.irreversible, "payload_hash": p.payload_hash} for p in plan["steps"]],
+        }
+        with db_module.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO navigator_operation_runs (run_id, objective, requested_by, plan_json, steps_state_json, "
+                "status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (run_id, objective, requested_by, json.dumps(plan_json), json.dumps(state),
+                 self._plan_status(plan_json, state), now, now),
+            )
+        return run_id
+
+    # ---------------------------------------------------------- leitura
+    def load(self, run_id: str) -> tuple:
+        with db_module.connect(self.db_path) as conn:
+            row = conn.execute("SELECT * FROM navigator_operation_runs WHERE run_id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        return json.loads(row["plan_json"]), json.loads(row["steps_state_json"]), row["status"]
+
+    def _save(self, run_id: str, plan: dict, state: dict) -> str:
+        status = self._plan_status(plan, state)
+        with db_module.connect(self.db_path) as conn:
+            conn.execute("UPDATE navigator_operation_runs SET steps_state_json = ?, status = ?, updated_at = ? "
+                         "WHERE run_id = ?", (json.dumps(state), status, time.time(), run_id))
+        return status
+
+    @staticmethod
+    def _plan_status(plan: dict, state: dict) -> str:
+        sts = [state[s["step_id"]]["status"] for s in plan["steps"]]
+        if all(s == "CANCELLED" for s in sts):
+            return "CANCELLED"
+        if all(s in _DONE for s in sts):
+            return "SUCCEEDED"
+        if all(s in _TERMINAL for s in sts):
+            done = any(s in _DONE for s in sts)
+            if done:
+                return "PARTIAL"
+            return "BLOCKED" if all(s in ("BLOCKED", "CANCELLED") for s in sts) else "FAILED"
+        if any(s == "WAITING_APPROVAL" for s in sts):
+            return "WAITING_APPROVAL"
+        return "RUNNING" if any(s not in ("PLANNED", "BLOCKED") for s in sts) else "PLANNED"
+
+    # ----------------------------------------------------------- execução
+    def advance(self, run_id: str, *, now: float | None = None) -> str:
+        """Avança tudo o que estiver pronto; devolve o status do plano."""
+        plan, state, _ = self.load(run_id)
+        progressed = True
+        # v1.0.2: defesa em profundidade — um laço sem fim vira erro registrado,
+        # nunca processo travado (o avanço legítimo converge em poucas passagens).
+        budget = 10 * len(plan["steps"]) + 10
+        while progressed:
+            budget -= 1
+            if budget < 0:
+                import logging
+
+                logging.getLogger("growth_studio.navigator").error(
+                    "advance(%s) excedeu o limite de iterações — interrompido para não travar o worker", run_id)
+                break
+            progressed = False
+            for spec in sorted(plan["steps"], key=lambda s: s["order"]):
+                st = state[spec["step_id"]]
+                if st["status"] in _TERMINAL or st["status"] == "ACCEPTED" and not spec.get("verify_method"):
+                    continue
+                before = json.dumps(st, sort_keys=True)
+                self._advance_step(run_id, plan, state, spec, time.time() if now is None else now)
+                if json.dumps(st, sort_keys=True) != before:
+                    progressed = True
+                    self._save(run_id, plan, state)   # CHECKPOINT a cada transição
+        return self._save(run_id, plan, state)
+
+    def _advance_step(self, run_id, plan, state, spec, now):
+        sid, st = spec["step_id"], state[spec["step_id"]]
+        by_id = {s["step_id"]: s for s in plan["steps"]}
+        dep_states = [state[d]["status"] for d in spec["depends_on"]]
+        if any(d in ("FAILED", "BLOCKED", "UNKNOWN", "CANCELLED") for d in dep_states):
+            st["status"] = "BLOCKED"
+            st["reasons"] = [f"dependência não concluída: {d}={state[d]['status']}" for d in spec["depends_on"]
+                             if state[d]["status"] not in _DONE]
+            return
+        if any(d not in _DONE for d in dep_states):
+            return                                          # aguarda dependências
+        if st["status"] == "ACCEPTED":
+            self._verify(spec, st, now)
+            return
+        if st["status"] == "RETRYING" and now < st["next_attempt_at"]:
+            return
+        prep = self.planner.preparer.prepare(
+            step_id=sid, platform=spec["platform"], action=spec["action"], adapter_method=spec["adapter_method"],
+            params=spec["params"], required_params=spec["required_params"], expected_hash=spec["payload_hash"])
+        if not prep.ready:
+            st["status"], st["reasons"] = "BLOCKED", [prep.reason()]
+            return
+        art = prep.artifact
+        idem = f"{run_id}:{sid}"
+        criticality = ActionCriticality(spec["criticality"])
+        if criticality == ActionCriticality.CRITICAL:
+            if st["escalation_id"] is None:
+                from core.operations import kill_switch as _ks   # v1.0.2: também antes de pedir aprovação
+
+                _blocked = _ks.block_reason(self.db_path)
+                if _blocked:
+                    st["reasons"] = [_blocked]      # estado ESTÁVEL: o laço de advance termina
+                    return
+                r = self.navigator.execute_action(platform=art.platform, action=art.action, criticality=criticality,
+                                                  params=art.params, actor=self.actor, idempotency_key=idem)
+                # v1.0.2 (liveness — defeito real da 1.0.1): sem escalação criada,
+                # o passo NÃO vira WAITING_APPROVAL. Antes, o carimbo novo a cada
+                # iteração fazia `advance()` girar para sempre (worker travado).
+                if r.escalation_id is None:
+                    st["reasons"] = [r.reason or "escalação não criada — ação recusada antes da aprovação"]
+                    return
+                st["escalation_id"], st["status"] = r.escalation_id, "WAITING_APPROVAL"
+                st["evidence"]["approval_requested_at"] = now
+                return
+            item = self.desk.get(st["escalation_id"])
+            status = getattr(item.status, "value", str(item.status))
+            if status in ("REJECTED", "CANCELLED", "EXPIRED"):
+                st["status"], st["reasons"] = "CANCELLED", [f"aprovação do Owner {status}"]
+                return
+            if status != "APPROVED":
+                return                                      # continua aguardando o Owner
+            if st["status"] == "WAITING_APPROVAL":
+                st["status"] = "APPROVED"
+                st["evidence"]["approved_at"] = now
+                approver = getattr(item, "resolved_by", None)
+                st["evidence"]["approved_by"] = getattr(approver, "subject", None) or (str(approver) if approver else None)
+        from core.operations import kill_switch as _ks   # v1.0.1: KILL SWITCH antes do despacho
+
+        _blocked = _ks.block_reason(self.db_path)
+        if _blocked:
+            st["reasons"] = [_blocked]      # estado preservado: nenhuma tentativa consumida
+            return
+        st["status"] = "RUNNING"
+        st["attempts"] += 1
+        st["evidence"].setdefault("sent_at", []).append(now)
+        self._save(run_id, plan, state)                     # checkpoint ANTES do envio
+        result = self.navigator.execute_action(
+            platform=art.platform, action=art.action, criticality=criticality, params=art.params, actor=self.actor,
+            adapter_method=art.adapter_method, idempotency_key=idem, approved_escalation_id=st["escalation_id"])
+        if self.observability is not None:
+            self.observability.record_navigator_result(result=result, criticality=criticality.value, actor=self.actor)
+        delivery = result.delivery_state or ("EXECUTED" if result.success else "NOT_SENT")
+        if result.replayed_from_cache and result.success:
+            delivery = "EXECUTED"
+        st["delivery"], st["result_data"] = delivery, result.data
+        st["evidence"]["mechanism"] = result.mechanism_used
+        if delivery == "EXECUTED":
+            missing = self.planner.preparer.validate_output(data=result.data,
+                                                            required_result_keys=spec["success_result_keys"])
+            if missing:
+                st["status"], st["reasons"] = "UNKNOWN", [
+                    f"serviço respondeu sucesso, mas a saída não atende aos critérios (faltam {missing}) — reconciliar"]
+                return
+            st["status"], st["evidence"]["executed_at"] = "EXECUTED", now
+            st["external_id"] = (result.data or {}).get("id")
+            self._verify(spec, st, now)
+        elif delivery == "ACCEPTED":
+            st["status"], st["evidence"]["accepted_at"] = "ACCEPTED", now
+            st["external_id"] = (result.data or {}).get("id")
+            self._verify(spec, st, now)
+        elif delivery == "UNKNOWN":
+            st["status"], st["reasons"] = "UNKNOWN", [result.reason]
+        elif delivery == "REJECTED":
+            st["status"], st["reasons"] = "FAILED", [result.reason]
+        elif delivery == "TRANSIENT" or (delivery == "NOT_SENT" and "rate limit" in result.reason):
+            if st["attempts"] >= min(spec["max_attempts"], self.retry.max_attempts):
+                st["status"], st["reasons"] = "FAILED", [f"esgotou {st['attempts']} tentativas: {result.reason}"]
+            else:
+                st["status"] = "RETRYING"
+                st["next_attempt_at"] = now + self.retry.delay_for_attempt(st["attempts"])
+                st["reasons"] = [result.reason]
+        else:                                               # NOT_SENT por pré-condição (credencial, caminho)
+            st["status"], st["reasons"] = "BLOCKED", [result.reason]
+
+    def _verify(self, spec, st, now):
+        """CONFIRMED só com leitura real de confirmação na API oficial.
+        O nome da ação é uma LEITURA genuína (`GET_EXECUTION_STATUS`): um
+        nome derivado da ação verificada (ex.: `GET_PUBLISH_VIDEO_STATUS`)
+        contém palavra-chave de escrita e o `PolicyActionRegistry`
+        (corretamente, fail-safe) o trataria como CRÍTICO."""
+        if not spec.get("verify_method"):
+            return
+        if now < st.get("next_verify_at", 0.0):
+            return          # backoff de verificação: nunca martela a API da plataforma
+        params = {p: (st["result_data"] or {}).get(k) for p, k in spec["verify_param_from_result"].items()}
+        if any(v in (None, "") for v in params.values()):
+            return
+        r = self.navigator.execute_action(platform=spec["platform"], action="GET_EXECUTION_STATUS",
+                                          criticality=ActionCriticality.ROUTINE, params=params, actor=self.actor,
+                                          adapter_method=spec["verify_method"])
+        if r.success and (r.data or {}).get("status") in ("done", "published", "active", "completed", "confirmed"):
+            st["status"], st["evidence"]["confirmed_at"] = "CONFIRMED", now
+            st["evidence"]["confirmation"] = r.data
+            return
+        st["verify_attempts"] = st.get("verify_attempts", 0) + 1
+        st["next_verify_at"] = now + self.retry.delay_for_attempt(min(st["verify_attempts"], 10))
+        st["evidence"]["last_verification"] = r.data if r.success else r.reason
+
+    # ------------------------------------------------- controle do plano
+    def cancel(self, run_id: str, *, reason: str) -> str:
+        plan, state, _ = self.load(run_id)
+        for spec in plan["steps"]:
+            st = state[spec["step_id"]]
+            if st["status"] not in _TERMINAL and st["status"] != "ACCEPTED":
+                st["status"], st["reasons"] = "CANCELLED", [reason]
+            elif st["status"] in _DONE and spec["irreversible"]:
+                st.setdefault("notes", []).append("cancelamento NÃO desfaz passo irreversível já executado")
+        return self._save(run_id, plan, state)
+
+    def replan(self, run_id: str) -> str:
+        """Reavalia caminho/pré-condições dos passos ainda não executados
+        (o ambiente pode ter mudado: conector caiu ou voltou)."""
+        plan, state, _ = self.load(run_id)
+        specs = [StepSpec(**{k: v for k, v in s.items() if k in StepSpec.__dataclass_fields__})
+                 for s in plan["steps"]]
+        fresh = {p.spec.step_id: p for p in self.planner.plan(objective=plan["objective"], steps=specs)["steps"]}
+        for spec in plan["steps"]:
+            st, p = state[spec["step_id"]], fresh[spec["step_id"]]
+            if st["status"] in ("PLANNED", "BLOCKED", "RETRYING"):
+                deps_blocked = any(state[d]["status"] in ("FAILED", "UNKNOWN", "CANCELLED") for d in spec["depends_on"])
+                if p.blocked_reasons:
+                    st["status"], st["reasons"] = "BLOCKED", list(p.blocked_reasons)
+                elif not deps_blocked:
+                    st["status"], st["reasons"] = "PLANNED", []
+                spec["mechanism"] = p.mechanism
+        with db_module.connect(self.db_path) as conn:
+            conn.execute("UPDATE navigator_operation_runs SET plan_json = ? WHERE run_id = ?",
+                         (json.dumps(plan), run_id))
+        return self._save(run_id, plan, state)
+
+
+# ----------------------------------------------------------------------
+# COMANDO 3/6 — acionamento por FILA/WORKER (reutiliza `core.jobs.queue.JobQueue`).
+# Cada "tick" é um job idempotente (`run_id:tick:N`). Se o worker morre no
+# meio de um `advance`, o job fica RUNNING no SQLite; `recover_stuck_jobs`
+# o devolve para nova tentativa e o próximo worker retoma do checkpoint —
+# passos concluídos nunca se repetem (claim do NavigatorReal + estado
+# persistido por transição).
+# ----------------------------------------------------------------------
+NAVIGATOR_ADVANCE_JOB = "navigator_run_advance"
+_ACTIVE_PLAN_STATUSES = ("PLANNED", "RUNNING", "WAITING_APPROVAL")
+
+
+def schedule_advance(queue, run_id: str, *, tick: int = 1):
+    return queue.enqueue(job_type=NAVIGATOR_ADVANCE_JOB, idempotency_key=f"{run_id}:tick:{tick}",
+                         payload={"run_id": run_id, "tick": tick}, max_attempts=5)
+
+
+def process_advance_jobs(queue, runner) -> list:
+    """Worker: processa os ticks pendentes. Devolve [(run_id, status)]."""
+    from core.models.entities import JobState
+
+    from core.operations import kill_switch as _ks   # v1.0.1: job em fila não inicia com kill switch
+
+    if _ks.block_reason(getattr(runner, "db_path", None)):
+        return []
+    processed = []
+    for job in list(queue.all()):
+        if job.job_type != NAVIGATOR_ADVANCE_JOB or job.state not in (JobState.QUEUED, JobState.RETRYING):
+            continue
+        if queue.try_start(job.job_id) is None:
+            continue                                  # outro worker reservou
+        run_id, tick = job.payload["run_id"], job.payload["tick"]
+        try:
+            status = runner.advance(run_id)
+        except Exception as exc:                      # nunca engole: o job registra a falha real
+            queue.fail(job.job_id, f"{type(exc).__name__}: {exc}")
+            continue
+        queue.complete(job.job_id, {"status": status})
+        if status in _ACTIVE_PLAN_STATUSES:
+            schedule_advance(queue, run_id, tick=tick + 1)
+        processed.append((run_id, status))
+    return processed

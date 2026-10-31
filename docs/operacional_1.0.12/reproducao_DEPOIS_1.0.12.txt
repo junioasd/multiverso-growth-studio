@@ -1,0 +1,9 @@
+# DEPOIS — 1.0.12 candidate
+=== 1) run_metered_call: mesmo correlation_id, PROMPT A e depois PROMPT B
+   PROMPT A: available=True | 
+   PROMPT B: available=False | CORRELATION_ID_CONFLICT: 'cid-1' já pertence 
+   executados: ['PROMPT A'] | fingerprint persistido: ["reservation_payload_v2", "paid", "gen", "gen", "1.0", "USD", null, null, null, "9960cff5aa19de9553abd98c028f
+=== 2) HttpGenerationProvider -> socket loopback: prompt A e depois prompt B com o mesmo correlation_id
+   prompt A: available=True | 
+   prompt B: available=False | CORRELATION_ID_CONFLICT: 'same-id' já pertenc
+   requisicoes recebidas pelo servidor (prompts): ['A']

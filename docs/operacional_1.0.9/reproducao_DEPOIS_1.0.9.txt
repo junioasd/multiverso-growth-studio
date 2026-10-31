@@ -1,0 +1,19 @@
+# DEPOIS — 1.0.9 candidate
+=== B1: moeda legada ZZZ com historico
+   preview: INVALID_CURRENCY
+   retire: REJEITADO ValueError: CURRENCY_RETIREMENT_REQUIRES_RECONCILIATION: 'ZZZ' tem 1 registro(s) financ
+   migrate ZZZ->USD: REJEITADO ValueError: UNSUPPORTED_CURRENCY: origem/destino inválidos, não suportados ou iguais ('
+   fluxo publico de recuperacao existe? True
+=== B2: USD->JPY e depois JPY retirado da politica
+   migracao USD->JPY: {'provider': 'j', 'from': 'USD', 'to': 'JPY', 'fx_rate': 150.0, 'migration_id': 1}
+   retire (JPY fora da politica): REJEITADO ValueError: CURRENCY_RETIREMENT_REQUIRES_RECONCILIATION: 'JPY' tem 1 registro(s) financ
+   limites restantes: [('provider_total', 'JPY')] | historico efetivo: [(1500.0, 'JPY')]
+=== B3: teto alterado depois do uso desconhecido
+   write-off: WRITE_OFF
+   cobranca do evento (teto vigente era 100): [(100.0,)]
+=== B4: duas reservas iguais; resultado de B chega primeiro
+   record_usage(custo 100, sem reservation_id): REJEITADO ValueError: AMBIGUOUS_RESERVATION_MATCH: 2 reservas abertas equivalentes para p/s/o — i
+   A: [('RESERVED',)] | B: [('RESERVED',)] | incidentes: []
+=== B1 (recuperacao): reconcile_unsupported_currency_history ZZZ->USD (5 x 2 = 10)
+    {'provider': 'lz', 'legacy': 'ZZZ', 'target': 'USD', 'migration_id': 2, 'converted_total': 10.0}
+   preview USD 1: AUTHORIZED

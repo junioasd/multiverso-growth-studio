@@ -1,0 +1,13 @@
+# DEPOIS — 1.0.6 candidate
+=== B1: unknown_cost_upper_bound = 0
+   set_limit(ub=0): REJEITADO ValueError: unknown_cost_upper_bound exige valor ESTRITAMENTE > 0 (teto confiável)
+   2 chamadas sem custo: available=[True, False] hits=['/gen'] incidentes=1 ledger={'calls': 1, 'known_cost': 0, 'calls_cost_unknown': 1, 'budget_charged': 1.0}
+=== B2: duas reconciliacoes concorrentes do mesmo incidente
+   resultados: {10.0: 'RECONCILED', 20.0: 'REJEITADO ReconciliationConflict: RECONCILIATION_CONFLICT: incidente inc_ac65685b1312 já encerrado com c'} | ledger m = 10.0
+=== B3: limite trocado de USD para EUR com historico em USD
+   set_limit EUR: REJEITADO ValueError: BUDGET_CURRENCY_CHANGE_REQUIRES_RECONCILIATION: provedor 'fxp' tem 1 l
+   preview EUR 40: CURRENCY_MISMATCH | EUR 60: CURRENCY_MISMATCH (os 50 USD contados como EUR?)
+=== B4: settle contraditorio
+   A NOT_EXECUTED + custo 100: {'reservation_id': 'rsv_8e35be656e1a4271', 'status': 'HELD_CONFLICT', 'cost_status': 'SETTLEMENT_STATE_CONFLICT', 'budget_charge': 100.0}
+   B UNKNOWN + custo 100: {'reservation_id': 'rsv_b7b1ffdfa064491f', 'status': 'HELD_CONFLICT', 'cost_status': 'SETTLEMENT_STATE_CONFLICT', 'budget_charge': 100.0}
+   ledger c = 100.0 | incidentes c = 1 | ledger c2 = 100.0 | incidentes c2 = 1

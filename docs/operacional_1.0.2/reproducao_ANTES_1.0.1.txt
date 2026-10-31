@@ -1,0 +1,15 @@
+# ANTES — pacote 1.0.1 auditado (a04d5093…)
+=== 1) provedor pago: limite acumulado USD 1,00; 2 chamadas de 0,60
+   provider.name = http_generation_provider
+   chamada 1: available=True reason=''
+   chamada 2: available=True reason=''
+   hits HTTP=2 | consumo registrado={}
+=== 2) corrida concorrente: limite 10, duas reservas de 6
+   autorizacoes: ['AUTHORIZED', 'AUTHORIZED'] | gasto final: {'calls': 2, 'known_cost': 12.0, 'calls_cost_unknown': 0}
+=== 3) kill switch ativado entre retries de webhook
+   hits=2 kill_switch=ENABLED resultado success=True delivery=EXECUTED attempts=2
+=== 4) linha do kill switch ausente
+   apos remover a linha: state=DISABLED external_execution_allowed=True
+   banco NOVO tem linha inicial explicita? False
+--- liveness (defeito extra, encontrado nesta correção):
+TRAVADO: advance() nao retornou em 8s | passo: {"status": "WAITING_APPROVAL", "reasons": [], "attempts": 0, "next_attempt_at": 0.0, "escalation_id": null, "delivery": null, "external_id": null, "resul
