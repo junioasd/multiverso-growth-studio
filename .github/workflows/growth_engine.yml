@@ -1,0 +1,59 @@
+name: Multiverso Growth Studio - Engine Pipeline
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+    inputs:
+      reasoning_mode:
+        description: 'Ativar ReasoningEngine na execucao'
+        required: false
+        default: 'false'
+
+jobs:
+  run-growth-engine:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do codigo-fonte
+        uses: actions/checkout@v4
+
+      - name: Configurar ambiente Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Executar Pipeline Principal do ATLAS
+        env:
+          APP_ENV: production
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          YOUTUBE_OAUTH_CLIENT_ID: ${{ secrets.YOUTUBE_OAUTH_CLIENT_ID }}
+          YOUTUBE_OAUTH_CLIENT_SECRET: ${{ secrets.YOUTUBE_OAUTH_CLIENT_SECRET }}
+          TIKTOK_API_KEY: ${{ secrets.TIKTOK_API_KEY }}
+          META_API_KEY: ${{ secrets.META_API_KEY }}
+          HOTMART_CLIENT_ID: ${{ secrets.HOTMART_CLIENT_ID }}
+          HOTMART_CLIENT_SECRET: ${{ secrets.HOTMART_CLIENT_SECRET }}
+          MONETIZZE_API_KEY: ${{ secrets.MONETIZZE_API_KEY }}
+          EDUZZ_API_KEY: ${{ secrets.EDUZZ_API_KEY }}
+          KIWIFY_API_KEY: ${{ secrets.KIWIFY_API_KEY }}
+          BRAIP_API_KEY: ${{ secrets.BRAIP_API_KEY }}
+          PAYMENT_PROVIDER_KEY: ${{ secrets.PAYMENT_PROVIDER_KEY }}
+          ANALYTICS_PROVIDER_KEY: ${{ secrets.ANALYTICS_PROVIDER_KEY }}
+        run: |
+          python main.py
+
+      - name: Preservar Evidencias e Logs da Execucao
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: growth-execution-logs
+          path: |
+            *.log
+            data/*.db
+          retention-days: 7
